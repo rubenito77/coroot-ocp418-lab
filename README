@@ -1,32 +1,77 @@
-# Coroot CE Lab on OpenShift 4.18
+# Coroot CE on OpenShift 4.18 Lab
 
-Validated lab for Coroot CE on OpenShift 4.18.x using Coroot Operator and a pinned custom node-agent.
-
----
-
-## Validated Environment
-
-* OpenShift: 4.18.38
-* Coroot Operator Helm Chart: `coroot-operator-0.9.4`
-* Coroot Operator App Version: `1.9.3`
-* Custom Node Agent: `ghcr.io/coroot/coroot-node-agent:1.28.3`
+Validated deployment guide and workaround for running **Coroot Community Edition** on **OpenShift 4.18.x** using Coroot Operator with a pinned custom node-agent.
 
 ---
 
-## Known Issue
+# Overview
 
-The node-agent deployed by the Coroot Operator may fail on OCP 4.18 due to eBPF/verifier incompatibility.
+This repository provides a validated lab deployment for:
 
-### Workaround
-
-1. Install Coroot Operator
-2. Create Coroot CR
-3. Disable operator-managed node-agent
-4. Deploy custom node-agent `1.28.3`
+* Installing Coroot Operator via Helm
+* Deploying Coroot backend on OpenShift 4.18
+* Working around node-agent incompatibility on OCP 4.18
+* Deploying demo workloads for observability validation
+* Testing service maps, metrics, profiling, and RCA
 
 ---
 
-## Repository Structure
+# Validated Environment
+
+| Component                   | Version  |
+| --------------------------- | -------- |
+| OpenShift                   | 4.18.38  |
+| RHCOS Kernel                | 5.14.x   |
+| Coroot Operator Helm Chart  | 0.9.4    |
+| Coroot Operator App Version | 1.9.3    |
+| Coroot Node Agent           | 1.28.3   |
+| L7 Tracing                  | Disabled |
+
+---
+
+# Known Issue
+
+Coroot Operator deploys a recent node-agent version by default.
+
+On OpenShift 4.18 / RHCOS 5.14.x this may fail with:
+
+```text
+CrashLoopBackOff
+verifier reject
+permission denied loading BPF program
+uprobes attach failure
+```
+
+---
+
+# Root Cause
+
+Newer Coroot node-agent versions (`>=1.31`) introduce:
+
+* Advanced eBPF Programs
+* TLS Uprobes
+* OpenSSL Hooks
+* Java TLS Hooks
+* Deep Layer 7 Tracing
+
+These features are incompatible with the tested OCP 4.18 kernel/verifier configuration.
+
+---
+
+# Validated Workaround
+
+Use:
+
+```yaml
+Node Agent Version: 1.28.3
+L7 Tracing: Disabled
+Deployment Model: Custom DaemonSet
+Operator Native Node-Agent: Disabled
+```
+
+---
+
+# Repository Structure
 
 ```text
 coroot-ocp418-lab/
@@ -52,11 +97,133 @@ coroot-ocp418-lab/
 
 ---
 
-## Install Coroot Operator
+# Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph OCP[OpenShift 4.18 Cluster]
+        OP[Coroot Operator]
+        CR[Coroot CR]
+        DS1[Operator Node-Agent Disabled]
+
+        subgraph Backend[Coroot Backend Stack]
+            UI[Coroot UI]
+            PROM[Prometheus]
+            CH[ClickHouse]
+            AGENT[Cluster Agent]
+        end
+
+        subgraph CustomAgent[Custom Node Agent]
+            DS2[coroot-node-agent-custom]
+            NA1[Worker Node 1]
+            NA2[Worker Node 2]
+            NA3[Worker Node N]
+        end
+
+        subgraph Apps[Observed Applications]
+            APP1[Traffic Demo]
+            APP2[Online Boutique]
+            APP3[Other Workloads]
+        end
+    end
+
+    OP --> CR
+    CR --> Backend
+
+    DS2 --> NA1
+    DS2 --> NA2
+    DS2 --> NA3
+
+    NA1 --> APP1
+    NA2 --> APP2
+    NA3 --> APP3
+
+    DS2 --> UI
+    DS2 --> PROM
+    DS2 --> CH
+```
+
+---
+
+# Node Agent Runtime Capabilities
+
+```mermaid
+flowchart TD
+    A[Coroot Node Agent 1.28.3] --> B[eBPF / Runtime Hooks]
+
+    B --> C[Process Discovery]
+    B --> D[Container Discovery]
+    B --> E[CPU / Memory / Disk Metrics]
+    B --> F[Network Throughput]
+    B --> G[TCP Socket Monitoring]
+    B --> H[Service Detection]
+    B --> I[Service Topology Mapping]
+    B --> J[Continuous Profiling]
+    B --> K[Container Log Parsing]
+
+    A --> L[Disabled via --disable-l7-tracing]
+
+    L --> M[HTTP Payload Inspection]
+    L --> N[TLS Decryption Hooks]
+    L --> O[OpenSSL Uprobes]
+    L --> P[Java TLS Hooks]
+    L --> Q[gRPC Deep Inspection]
+
+    B --> R[Prometheus Remote Write]
+    R --> S[Coroot Backend]
+```
+
+---
+
+# Failure vs Workaround Diagram
+
+```mermaid
+flowchart TD
+
+    subgraph DefaultOperatorFlow[Default Coroot Operator Deployment]
+        OP1[Coroot Operator]
+        DSFAIL[Operator Managed Node-Agent]
+        NEWVER[Node-Agent >= 1.31]
+        EBPF1[Advanced eBPF / TLS / L7 Hooks]
+        FAIL[CrashLoopBackOff / Verifier Reject]
+    end
+
+    OP1 --> DSFAIL
+    DSFAIL --> NEWVER
+    NEWVER --> EBPF1
+    EBPF1 --> FAIL
+
+    subgraph WorkaroundFlow[Validated Workaround]
+        OP2[Coroot Operator]
+        DISABLE[Disable Operator Node-Agent]
+        CUSTOMDS[Custom Node-Agent DS]
+        OLDVER[Node-Agent 1.28.3]
+        NOL7[--disable-l7-tracing]
+        STABLE[Stable Running on OCP 4.18]
+    end
+
+    OP2 --> DISABLE
+    DISABLE --> CUSTOMDS
+    CUSTOMDS --> OLDVER
+    OLDVER --> NOL7
+    NOL7 --> STABLE
+```
+
+---
+
+# Installation
+
+## 1. Create Namespace
 
 ```bash
 oc apply -f coroot/00-namespace.yaml
+```
 
+---
+
+## 2. Install Coroot Operator
+
+```bash
 helm repo add coroot https://coroot.github.io/helm-charts
 helm repo update
 
@@ -65,21 +232,15 @@ helm install coroot-operator coroot/coroot-operator -n coroot
 
 ---
 
-## Create Coroot Instance
+## 3. Create Coroot Instance
 
 ```bash
 oc apply -f coroot/01-coroot-cr.yaml
 ```
 
-Validate:
-
-```bash
-oc get pods -n coroot -w
-```
-
 ---
 
-## Disable Operator Node Agent
+## 4. Disable Operator Node-Agent
 
 ```bash
 oc patch ds coroot-node-agent \
@@ -90,7 +251,7 @@ oc patch ds coroot-node-agent \
 
 ---
 
-## Deploy Custom Node Agent
+## 5. Deploy Custom Node-Agent
 
 ```bash
 oc adm policy add-scc-to-user privileged \
@@ -102,19 +263,23 @@ oc apply -f coroot/03-node-agent-custom.yaml
 
 ---
 
-## Expose Coroot UI
+## 6. Expose Coroot UI
 
 ```bash
 oc apply -f coroot/04-coroot-route.yaml
 ```
 
-Get Route:
+---
+
+## 7. Get Route
 
 ```bash
 oc get route coroot -n coroot
 ```
 
-Login:
+---
+
+# Login
 
 ```text
 Username: admin
@@ -123,7 +288,9 @@ Password: CorootAdmin123!
 
 ---
 
-## Deploy Simple Traffic Demo
+# Deploy Demo Applications
+
+## Simple Traffic Demo
 
 ```bash
 oc apply -f traffic-demo/00-traffic-demo.yaml
@@ -132,7 +299,7 @@ oc apply -f traffic-demo/01-traffic-generator.yaml
 
 ---
 
-## Deploy Advanced Traffic Demo
+## Advanced Traffic Demo
 
 ```bash
 oc apply -f traffic-demo/02-traffic-demo-advanced.yaml
@@ -141,7 +308,7 @@ oc apply -f traffic-demo/03-traffic-generator-advanced.yaml
 
 ---
 
-## Deploy Online Boutique Demo
+## Online Boutique Demo
 
 ```bash
 oc apply -f boutique/00-namespace.yaml
@@ -155,17 +322,11 @@ oc rollout restart deploy -n boutique
 oc apply -f boutique/02-frontend-route.yaml
 ```
 
-Get Boutique Route:
-
-```bash
-oc get route boutique-frontend -n boutique
-```
-
 ---
 
-## Validation
+# Validation
 
-Check Node Agent Health:
+## Check Node Agent Health
 
 ```bash
 oc logs -n coroot \
@@ -182,15 +343,31 @@ sent metrics in XXms
 
 ---
 
-## Final Status
+# Functional Capability Matrix
 
-Validated working baseline:
+| Capability                 | Status     | Notes                         |
+| -------------------------- | ---------- | ----------------------------- |
+| Infrastructure Metrics     | ✅ Enabled  | Full node/container metrics   |
+| Service Map / Topology     | ✅ Enabled  | Auto-discovery works          |
+| Network Traffic Visibility | ✅ Enabled  | TCP/basic HTTP visibility     |
+| Continuous Profiling       | ✅ Enabled  | CPU profiling active          |
+| Root Cause Analysis        | ✅ Partial  | Based on infra + metrics      |
+| HTTP Deep Tracing          | ❌ Disabled | No payload/L7 deep inspection |
+| TLS Payload Visibility     | ❌ Disabled | No decrypted TLS traces       |
+| Advanced App Tracing       | ❌ Disabled | Requires full L7 tracing      |
+
+---
+
+# Final Assessment
+
+This deployment model is validated as:
 
 ```yaml
 Platform: OpenShift 4.18.38
-Coroot Operator: 1.9.3
-Node Agent: 1.28.3
-L7 Tracing: Disabled
-Status: Stable / Production Candidate for PoC
+Coroot Backend: Stable
+Operator: Stable
+Default Node-Agent: Incompatible
+Custom Node-Agent 1.28.3: Stable
+Production Candidate: PoC / Lab / Evaluation
 ```
 
